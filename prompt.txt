@@ -1,0 +1,1342 @@
+File: app.ts
+Path: app.ts
+// app.ts
+import express from 'express';
+import swaggerUi from 'swagger-ui-express';
+import swaggerJSDoc from 'swagger-jsdoc';
+import customerRoutes from './routes/customers.routes';  // Make sure the path is correct
+import apiLimiter from './middleware/api-limiter.middleware';  // Make sure this middleware is properly configured
+import orderRoutes from './routes/orders.routes';
+import CLVRoutes from './routes/customer-lifetime-value.routes';
+
+const app = express();
+
+const swaggerOptions = {
+  swaggerDefinition: {
+    openapi: '3.0.0',
+    info: {
+      title: 'Analytics API',
+      version: '1.0.0',
+      description: 'API documentation for the Analytics Service',
+    },
+    servers: [
+      {
+        url: 'http://localhost:3000/api',
+      },
+    ],
+  },
+  apis: ['./src/routes/*.ts', './src/controllers/*.ts'], // Adjust the path if needed
+};
+
+const swaggerDocs = swaggerJSDoc(swaggerOptions);
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+
+app.use(express.json());
+app.use('/api/customers',apiLimiter, customerRoutes); // Mounting customer routes
+app.use('/api/orders',apiLimiter, orderRoutes); // Mounting customer routes
+app.use('/api/clv',apiLimiter, CLVRoutes); // Mounting customer routes
+
+export default app;
+
+
+File: db.ts
+Path: config\db.ts
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+
+dotenv.config(); // Load environment variables from .env file
+
+const mongoUrl = process.env.MONGO_URI;
+
+if (!mongoUrl) {
+  throw new Error('MONGO_URL is not defined in the environment variables');
+}
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect(mongoUrl);
+    console.log('MongoDB connected successfully');
+  } catch (error:any) {
+    console.error('MongoDB connection failed:', error.message);
+    process.exit(1); // Exit the process with failure
+  }
+};
+
+export default connectDB;
+
+
+File: customer-lifetime-value.controller.ts
+Path: controllers\customer-lifetime-value.controller.ts
+// src/controllers/clvController.ts
+
+import { Request, Response } from 'express';
+import { CLVService } from '../services/customer-lifetime.service';
+
+export class CLVController {
+  private clvService: CLVService;
+
+  constructor() {
+    this.clvService = new CLVService();
+  }
+
+  /**
+   * @swagger
+   * /clv/customer-lifetime-value:
+   *   get:
+   *     summary: Returns Customer Lifetime Value by cohorts
+   *     description: Calculates the total lifetime value of customers grouped by the month of their first purchase.
+   *     responses:
+   *       200:
+   *         description: An array of cohort lifetime values.
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: array
+   *               items:
+   *                 type: object
+   *                 properties:
+   *                   cohort:
+   *                     type: string
+   *                     description: The month of the first purchase
+   *                   totalValue:
+   *                     type: number
+   *                     description: Total lifetime value for the cohort
+   */
+  public getCLV = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clvData = await this.clvService.calculateCLV();
+      res.json(clvData);
+    } catch (error:any) {
+      res.status(500).send(error.message);
+    }
+  };
+}
+
+
+File: customer.controller.ts
+Path: controllers\customer.controller.ts
+// src/controllers/customerController.ts
+
+import { Request, Response } from 'express';
+import { CustomerService } from '../services/customer.service';
+
+export class CustomerController {
+  private customerService: CustomerService;
+
+  constructor() {
+    this.customerService = new CustomerService();
+  }
+
+  /**
+   * @swagger
+   * /customers/new-customers:
+   *   get:
+	 *     summary: Calculate sales growth rate over time
+	 *     description: Returns the percentage growth in sales for each interval compared to the previous interval.
+	 *     parameters:
+	 *       - in: query
+	 *         name: interval
+	 *         required: true
+	 *         schema:
+	 *           type: string
+	 *           enum: [daily, monthly, quarterly, yearly]
+	 *         description: Interval to calculate sales growth (daily, monthly, quarterly, yearly).
+   *     responses:
+   *       200:
+   *         description: A list of new customers added over time, grouped by interval.
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: array
+   *               items:
+   *                 type: object
+   *                 properties:
+   *                   _id:
+   *                     type: object
+   *                     properties:
+   *                       date:
+   *                         type: string
+   *                         format: date-time
+   *                   newCustomers:
+   *                     type: integer
+   */
+  public getNewCustomers = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const interval = req.query.interval as string | undefined; // Handle undefined case
+      if (!interval) {
+        res.status(400).send("Interval parameter is required.");
+        return;
+      }
+      const result = await this.customerService.getNewCustomers(interval);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).send(error.message);
+    }
+  };
+
+
+  /**
+   * @swagger
+   * /customers/geographical-distribution:
+   *   get:
+   *     summary: Get geographical distribution of customers by city
+   *     description: Returns a count of customers grouped by city.
+   *     responses:
+   *       200:
+   *         description: A list of cities with customer counts.
+   *         content:
+   *           application/json:
+   *             schema:
+   *               type: array
+   *               items:
+   *                 type: object
+   *                 properties:
+   *                   _id:
+   *                     type: string
+   *                     description: The city name
+   *                   customerCount:
+   *                     type: integer
+   *                     description: Number of customers in the city
+   */
+  public getCustomerDistributionByCity = async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await this.customerService.getCustomerDistributionByCity();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).send(error.message);
+    }
+  };
+}
+
+
+File: order.controller.ts
+Path: controllers\order.controller.ts
+// src/controllers/orderController.ts
+
+import { Request, Response } from "express";
+import { OrderService } from "../services/order.service";
+
+export class OrderController {
+	private orderService: OrderService;
+
+	constructor() {
+		this.orderService = new OrderService();
+	}
+
+	/**
+	 * @swagger
+	 * /orders/total-sales:
+	 *   get:
+	 *     summary: Retrieve total sales over time
+	 *     description: Returns total sales aggregated by specified time intervals.
+	 *     parameters:
+	 *       - in: query
+	 *         name: interval
+	 *         required: true
+	 *         schema:
+	 *           type: string
+	 *           enum: [daily, monthly, quarterly, yearly]
+	 *         description: Interval to group sales (daily, monthly, quarterly, yearly).
+	 *     responses:
+	 *       200:
+	 *         description: Total sales data aggregated by time intervals.
+	 *         content:
+	 *           application/json:
+	 *             schema:
+	 *               type: array
+	 *               items:
+	 *                 type: object
+	 *                 properties:
+	 *                   _id:
+	 *                     type: string
+	 *                     description: Start of the interval
+	 *                   totalSales:
+	 *                     type: number
+	 *                     description: Sum of sales in USD
+	 */
+	public getTotalSalesOverTime = async (
+		req: Request,
+		res: Response
+	): Promise<void> => {
+		try {
+			const { interval } = req.query as any;
+			const result = await this.orderService.getTotalSalesOverTime(
+				interval || "daily"
+			);
+			res.json(result);
+		} catch (error: any) {
+			res.status(500).send(error.message);
+		}
+	};
+
+	/**
+	 * @swagger
+	 * /orders/sales-growth:
+	 *   get:
+	 *     summary: Calculate sales growth rate over time
+	 *     description: Returns the percentage growth in sales for each interval compared to the previous interval.
+	 *     parameters:
+	 *       - in: query
+	 *         name: interval
+	 *         required: true
+	 *         schema:
+	 *           type: string
+	 *           enum: [daily, monthly, quarterly, yearly]
+	 *         description: Interval to calculate sales growth (daily, monthly, quarterly, yearly).
+	 *     responses:
+	 *       200:
+	 *         description: Sales growth rate data.
+	 *         content:
+	 *           application/json:
+	 *             schema:
+	 *               type: array
+	 *               items:
+	 *                 type: object
+	 *                 properties:
+	 *                   date:
+	 *                     type: string
+	 *                     description: Start of the interval
+	 *                   totalSales:
+	 *                     type: number
+	 *                     description: Total sales for the interval
+	 *                   growthRate:
+	 *                     type: number
+	 *                     description: Percentage growth compared to the previous period
+	 */
+	public getSalesGrowthRate = async (
+		req: Request,
+		res: Response
+	): Promise<void> => {
+		try {
+			const { interval } = req.query as any;
+			const result = await this.orderService.getSalesGrowthRate(
+				interval || "monthly"
+			);
+			res.json(result);
+		} catch (error: any) {
+			res.status(500).send(error.message);
+		}
+	};
+
+	/**
+	 * @swagger
+	 * /orders/repeat-customers:
+	 *   get:
+	 *     summary: Calculate sales growth rate over time
+	 *     description: Returns the percentage growth in sales for each interval compared to the previous interval.
+	 *     parameters:
+	 *       - in: query
+	 *         name: interval
+	 *         required: true
+	 *         schema:
+	 *           type: string
+	 *           enum: [daily, monthly, quarterly, yearly]
+	 *         description: Interval to calculate sales growth (daily, monthly, quarterly, yearly).
+	 *     responses:
+	 *       200:
+	 *         description: Number of repeat customers.
+	 *         content:
+	 *           application/json:
+	 *             schema:
+	 *               type: object
+	 *               properties:
+	 *                 repeatCustomers:
+	 *                   type: integer
+	 *                   description: Total number of repeat customers
+	 */
+	public getRepeatCustomers = async (
+		req: Request,
+		res: Response
+	): Promise<void> => {
+		try {
+			const interval = (req.query.interval as string) || "monthly";
+			const result = await this.orderService.getRepeatCustomers(interval);
+
+			res.json(result);
+		} catch (error: any) {
+			res.status(500).send(error.message);
+		}
+	};
+}
+
+
+File: api-limiter.middleware.ts
+Path: middleware\api-limiter.middleware.ts
+import rateLimit from 'express-rate-limit';
+
+// Define a basic rate limit: allow 100 requests per 15 minutes from the same IP
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
+    message: 'Too many requests from this IP, please try again later.',
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+export default apiLimiter;
+
+
+File: customer.model.ts
+Path: models\customer.model.ts
+import mongoose, { Document, Schema, Model, model } from 'mongoose';
+
+// Interface for the Address sub-document
+interface IAddress {
+  id: mongoose.Types.ObjectId;
+  customer_id: mongoose.Types.ObjectId;
+  first_name: string;
+  last_name: string;
+  company: string | null;
+  address1: string;
+  address2: string | null;
+  city: string;
+  province: string;
+  country: string;
+  zip: string;
+  phone: string | null;
+  name: string;
+  province_code: string | null;
+  country_code: string;
+  country_name: string;
+  default: boolean;
+}
+
+// Interface for the main Customer document
+export interface ICustomer extends Document {
+  admin_graphql_api_id: string;
+  created_at: Date;
+  currency: string;
+  default_address: IAddress;
+  email: string;
+  email_marketing_consent: {
+    state: string;
+    opt_in_level: string;
+    consent_updated_at: Date | null;
+  };
+  first_name: string;
+  last_name: string;
+  last_order_id: mongoose.Types.ObjectId | null;
+  last_order_name: string | null;
+  multipass_identifier: string | null;
+  note: string | null;
+  orders_count: number;
+  phone: string | null;
+  sms_marketing_consent: {
+    state: string;
+    opt_in_level: string;
+    consent_updated_at: Date | null;
+  } | null;
+  state: string;
+  tags: string;
+  tax_exempt: boolean;
+  tax_exemptions: string[];
+  total_spent: string;
+  updated_at: Date;
+  verified_email: boolean;
+  addresses: IAddress[];
+}
+
+// Schema for Address
+const AddressSchema: Schema<IAddress> = new Schema({
+  id: { type: Schema.Types.ObjectId, required: true },
+  customer_id: { type: Schema.Types.ObjectId, required: true },
+  first_name: { type: String, required: true },
+  last_name: { type: String, required: true },
+  company: { type: String, default: null },
+  address1: { type: String, required: true },
+  address2: { type: String, default: null },
+  city: { type: String, required: true },
+  province: { type: String, required: true },
+  country: { type: String, required: true },
+  zip: { type: String, required: true },
+  phone: { type: String, default: null },
+  name: { type: String, default: "" },
+  province_code: { type: String, default: null },
+  country_code: { type: String, default: "" },
+  country_name: { type: String, default: "" },
+  default: { type: Boolean, required: true },
+});
+
+// Schema for Customer
+const CustomerSchema: Schema<ICustomer> = new Schema({
+  admin_graphql_api_id: { type: String, required: true },
+  created_at: { type: Date, required: true },
+  currency: { type: String, default: "" },
+  default_address: { type: AddressSchema, required: true },
+  email: { type: String, required: true },
+  email_marketing_consent: {
+    state: { type: String, required: true },
+    opt_in_level: { type: String, required: true },
+    consent_updated_at: { type: Date, default: null },
+  },
+  first_name: { type: String, required: true },
+  last_name: { type: String, required: true },
+  last_order_id: { type: Schema.Types.ObjectId, default: null },
+  last_order_name: { type: String, default: null },
+  multipass_identifier: { type: String, default: null },
+  note: { type: String, default: null },
+  orders_count: { type: Number, required: true },
+  phone: { type: String, default: null },
+  sms_marketing_consent: {
+    state: { type: String, required: true },
+    opt_in_level: { type: String, required: true },
+    consent_updated_at: { type: Date, default: null },
+  },
+  state: { type: String, required: true },
+  tags: { type: String, default: "" },
+  tax_exempt: { type: Boolean, required: true },
+  tax_exemptions: { type: [String], required: true },
+  total_spent: { type: String, required: true },
+  updated_at: { type: Date, required: true },
+  verified_email: { type: Boolean, required: true },
+  addresses: { type: [AddressSchema], required: true },
+}, { collection: 'shopifyCustomers' });
+
+// Create the Customer model
+const Customer: Model<ICustomer> = model<ICustomer>('Customer', CustomerSchema);
+
+export default Customer;
+
+
+File: order.model.ts
+Path: models\order.model.ts
+import mongoose, { Document, Schema, Model, model } from 'mongoose';
+
+// Interface for Price Set
+interface IPriceSet {
+  shop_money: {
+    amount: string;
+    currency_code: string;
+  };
+  presentment_money: {
+    amount: string;
+    currency_code: string;
+  };
+}
+
+// Interface for Line Item
+interface ILineItem {
+  id: mongoose.Types.ObjectId;
+  variant_id: mongoose.Types.ObjectId;
+  title: string;
+  quantity: number;
+  sku: string;
+  variant_title: string;
+  vendor: string;
+  fulfillment_service: string;
+  product_id: mongoose.Types.ObjectId;
+  requires_shipping: boolean;
+  taxable: boolean;
+  gift_card: boolean;
+  name: string;
+  variant_inventory_management: string;
+  properties: any[];
+  product_exists: boolean;
+  fulfillable_quantity: number;
+  grams: number;
+  price: number;
+  total_discount: string;
+  fulfillment_status: string | null;
+  price_set: IPriceSet;
+  total_discount_set: IPriceSet;
+  discount_allocations: any[];
+  duties: any[];
+  admin_graphql_api_id: string;
+}
+
+// Interface for Customer
+interface ICustomer {
+  id: mongoose.Types.ObjectId;
+  email: string;
+  created_at: Date;
+  updated_at: Date;
+  first_name: string;
+  last_name: string;
+  orders_count: number;
+  state: string;
+  total_spent: string;
+  last_order_id: mongoose.Types.ObjectId;
+  note: string | null;
+  verified_email: boolean;
+  multipass_identifier: string | null;
+  tax_exempt: boolean;
+  phone: string | null;
+  tags: string;
+  last_order_name: string;
+  currency: string;
+  marketing_opt_in_level: string | null;
+  tax_exemptions: string[];
+  admin_graphql_api_id: string;
+  default_address: {
+    id: mongoose.Types.ObjectId;
+    customer_id: mongoose.Types.ObjectId;
+    first_name: string;
+    last_name: string;
+    company: string | null;
+    address1: string;
+    address2: string | null;
+    city: string;
+    province: string;
+    country: string;
+    zip: string;
+    phone: string | null;
+    name: string;
+    province_code: string | null;
+    country_code: string;
+    country_name: string;
+    default: boolean;
+  };
+}
+
+// Interface for the main Order document
+export interface IOrder extends Document {
+  _id: mongoose.Types.ObjectId;
+  id: mongoose.Types.ObjectId;
+  email: string;
+  closed_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  number: number;
+  note: string | null;
+  token: string;
+  gateway: string;
+  test: boolean;
+  total_price: string;
+  subtotal_price: string;
+  total_weight: number;
+  total_tax: string;
+  taxes_included: boolean;
+  currency: string;
+  financial_status: string;
+  confirmed: boolean;
+  total_discounts: string;
+  buyer_accepts_marketing: boolean;
+  name: string;
+  referring_site: string | null;
+  landing_site: string | null;
+  cancelled_at: Date | null;
+  cancel_reason: string | null;
+  reference: string | null;
+  user_id: mongoose.Types.ObjectId | null;
+  location_id: mongoose.Types.ObjectId | null;
+  source_identifier: string | null;
+  source_url: string | null;
+  device_id: string | null;
+  phone: string | null;
+  customer_locale: string;
+  app_id: number;
+  browser_ip: string;
+  landing_site_ref: string | null;
+  order_number: mongoose.Types.ObjectId;
+  discount_applications: any[];
+  discount_codes: any[];
+  note_attributes: any[];
+  payment_gateway_names: string[];
+  processing_method: string;
+  source_name: string;
+  fulfillment_status: string | null;
+  tax_lines: any[];
+  tags: string;
+  contact_email: string | null;
+  order_status_url: string;
+  presentment_currency: string;
+  total_line_items_price_set: IPriceSet;
+  total_discounts_set: IPriceSet;
+  total_shipping_price_set: IPriceSet;
+  subtotal_price_set: IPriceSet;
+  total_price_set: IPriceSet;
+  total_tax_set: IPriceSet;
+  line_items: ILineItem[];
+  shipping_lines: any[];
+  billing_address: any | null;
+  shipping_address: any | null;
+  fulfillments: any[];
+  client_details: any | null;
+  refunds: any[];
+  customer: ICustomer;
+  total_line_items_price: string;
+}
+
+// Schema for Price Set
+const PriceSetSchema: Schema = new Schema({
+  shop_money: {
+    amount: { type: String, required: true },
+    currency_code: { type: String, required: true },
+  },
+  presentment_money: {
+    amount: { type: String, required: true },
+    currency_code: { type: String, required: true },
+  },
+});
+
+// Schema for Line Item
+const LineItemSchema: Schema = new Schema({
+  id: { type: Schema.Types.ObjectId, required: true },
+  variant_id: { type: Schema.Types.ObjectId, required: true },
+  title: { type: String, required: true },
+  quantity: { type: Number, required: true },
+  sku: { type: String, default: "" },
+  variant_title: { type: String, required: true },
+  vendor: { type: String, required: true },
+  fulfillment_service: { type: String, required: true },
+  product_id: { type: Schema.Types.ObjectId, required: true },
+  requires_shipping: { type: Boolean, required: true },
+  taxable: { type: Boolean, required: true },
+  gift_card: { type: Boolean, required: true },
+  name: { type: String, required: true },
+  variant_inventory_management: { type: String, required: true },
+  properties: { type: Array, default: [] },
+  product_exists: { type: Boolean, required: true },
+  fulfillable_quantity: { type: Number, required: true },
+  grams: { type: Number, required: true },
+  price: { type: Number, required: true },
+  total_discount: { type: String, required: true },
+  fulfillment_status: { type: String, default: null },
+  price_set: { type: PriceSetSchema, required: true },
+  total_discount_set: { type: PriceSetSchema, required: true },
+  discount_allocations: { type: Array, default: [] },
+  duties: { type: Array, default: [] },
+  admin_graphql_api_id: { type: String, required: true },
+});
+
+// Schema for Customer
+const CustomerSchema: Schema = new Schema({
+  id: { type: Schema.Types.ObjectId, required: true },
+  email: { type: String, required: true },
+  created_at: { type: Date, required: true },
+  updated_at: { type: Date, required: true },
+  first_name: { type: String, required: true },
+  last_name: { type: String, required: true },
+  orders_count: { type: Number, required: true },
+  state: { type: String, required: true },
+  total_spent: { type: String, required: true },
+  last_order_id: { type: Schema.Types.ObjectId, required: true },
+  note: { type: String, default: null },
+  verified_email: { type: Boolean, required: true },
+  multipass_identifier: { type: String, default: null },
+  tax_exempt: { type: Boolean, required: true },
+  phone: { type: String, default: null },
+  tags: { type: String, default: "" },
+  last_order_name: { type: String, required: true },
+  currency: { type: String, default: "" },
+  marketing_opt_in_level: { type: String, default: null },
+  tax_exemptions: { type: [String], default: [] },
+  admin_graphql_api_id: { type: String, required: true },
+  default_address: {
+    id: { type: Schema.Types.ObjectId, required: true },
+    customer_id: { type: Schema.Types.ObjectId, required: true },
+    first_name: { type: String, required: true },
+    last_name: { type: String, required: true },
+    company: { type: String, default: null },
+    address1: { type: String, required: true },
+    address2: { type: String, default: null },
+    city: { type: String, required: true },
+    province: { type: String, required: true },
+    country: { type: String, required: true },
+    zip: { type: String, required: true },
+    phone: { type: String, default: null },
+    name: { type: String, default: "" },
+    province_code: { type: String, default: null },
+    country_code: { type: String, default: "" },
+    country_name: { type: String, default: "" },
+    default: { type: Boolean, required: true },
+  },
+});
+
+// Schema for Order
+const OrderSchema: Schema = new Schema({
+  _id: { type: Schema.Types.ObjectId, required: true },
+  id: { type: Schema.Types.ObjectId, required: true },
+  email: { type: String, required: true },
+  closed_at: { type: Date, default: null },
+  created_at: { type: Date, required: true },
+  updated_at: { type: Date, required: true },
+  number: { type: Number, required: true },
+  note: { type: String, default: null },
+  token: { type: String, default: "" },
+  gateway: { type: String, required: true },
+  test: { type: Boolean, required: true },
+  total_price: { type: String, required: true },
+  subtotal_price: { type: String, required: true },
+  total_weight: { type: Number, required: true },
+  total_tax: { type: String, required: true },
+  taxes_included: { type: Boolean, required: true },
+  currency: { type: String, required: true },
+  financial_status: { type: String, required: true },
+  confirmed: { type: Boolean, required: true },
+  total_discounts: { type: String, required: true },
+  buyer_accepts_marketing: { type: Boolean, required: true },
+  name: { type: String, required: true },
+  referring_site: { type: String, default: null },
+  landing_site: { type: String, default: null },
+  cancelled_at: { type: Date, default: null },
+  cancel_reason: { type: String, default: null },
+  reference: { type: String, default: null },
+  user_id: { type: Schema.Types.ObjectId, default: null },
+  location_id: { type: Schema.Types.ObjectId, default: null },
+  source_identifier: { type: String, default: null },
+  source_url: { type: String, default: null },
+  device_id: { type: String, default: null },
+  phone: { type: String, default: null },
+  customer_locale: { type: String, required: true },
+  app_id: { type: Number, required: true },
+  browser_ip: { type: String, default: "" },
+  landing_site_ref: { type: String, default: null },
+  order_number: { type: Schema.Types.ObjectId, required: true },
+  discount_applications: { type: Array, default: [] },
+  discount_codes: { type: Array, default: [] },
+  note_attributes: { type: Array, default: [] },
+  payment_gateway_names: { type: [String], required: true },
+  processing_method: { type: String, required: true },
+  source_name: { type: String, required: true },
+  fulfillment_status: { type: String, default: null },
+  tax_lines: { type: Array, default: [] },
+  tags: { type: String, default: "" },
+  contact_email: { type: String, default: null },
+  order_status_url: { type: String, default: "" },
+  presentment_currency: { type: String, required: true },
+  total_line_items_price_set: { type: PriceSetSchema, required: true },
+  total_discounts_set: { type: PriceSetSchema, required: true },
+  total_shipping_price_set: { type: PriceSetSchema, required: true },
+  subtotal_price_set: { type: PriceSetSchema, required: true },
+  total_price_set: { type: PriceSetSchema, required: true },
+  total_tax_set: { type: PriceSetSchema, required: true },
+  line_items: { type: [LineItemSchema], required: true },
+  shipping_lines: { type: Array, default: [] },
+  billing_address: { type: Schema.Types.Mixed, default: null },
+  shipping_address: { type: Schema.Types.Mixed, default: null },
+  fulfillments: { type: Array, default: [] },
+  client_details: { type: Schema.Types.Mixed, default: null },
+  refunds: { type: Array, default: [] },
+  customer: { type: CustomerSchema, required: true },
+  total_line_items_price: { type: String, required: true },
+},{collection:'shopifyOrders'});
+
+// Create the Order model
+const Order: Model<IOrder> = model<IOrder>('Orders', OrderSchema);
+
+export default Order;
+
+
+File: product.model.ts
+Path: models\product.model.ts
+import mongoose, { Document, Schema, Model, model } from 'mongoose';
+
+// Interface for Product Option
+interface IProductOption {
+  id: mongoose.Types.ObjectId;
+  product_id: mongoose.Types.ObjectId;
+  name: string;
+  position: number;
+  values: string[];
+}
+
+// Interface for Product Variant
+interface IProductVariant {
+  id: mongoose.Types.ObjectId;
+  product_id: mongoose.Types.ObjectId;
+  title: string;
+  price: number;
+  sku: string;
+  position: number;
+  inventory_policy: string;
+  compare_at_price: number | null;
+  fulfillment_service: string;
+  inventory_management: string | null;
+  option1: string;
+  option2: string | null;
+  option3: string | null;
+  created_at: string;
+  updated_at: string;
+  taxable: boolean;
+  barcode: string | null;
+  grams: number;
+  weight: number;
+  weight_unit: string;
+  inventory_item_id: mongoose.Types.ObjectId;
+  inventory_quantity: number;
+  old_inventory_quantity: number;
+  requires_shipping: boolean;
+  admin_graphql_api_id: string;
+  image_id: mongoose.Types.ObjectId | null;
+}
+
+// Interface for the main Product document
+export interface IProduct extends Document {
+  _id: mongoose.Types.ObjectId;
+  admin_graphql_api_id: string;
+  body_html: string | null;
+  created_at: Date;
+  handle: string;
+  id: mongoose.Types.ObjectId;
+  image: string | null;
+  images: string[];
+  options: IProductOption[];
+  product_type: string;
+  published_at: Date | null;
+  published_scope: string;
+  status: string;
+  tags: string;
+  template_suffix: string | null;
+  title: string;
+  updated_at: Date;
+  variants: IProductVariant[];
+  vendor: string;
+}
+
+// Schema for Product Option
+const ProductOptionSchema: Schema = new Schema({
+  id: { type: Schema.Types.ObjectId, required: true },
+  product_id: { type: Schema.Types.ObjectId, required: true },
+  name: { type: String, required: true },
+  position: { type: Number, required: true },
+  values: { type: [String], required: true },
+});
+
+// Schema for Product Variant
+const ProductVariantSchema: Schema = new Schema({
+  id: { type: Schema.Types.ObjectId, required: true },
+  product_id: { type: Schema.Types.ObjectId, required: true },
+  title: { type: String, required: true },
+  price: { type: Number, required: true },
+  sku: { type: String, default: "" },
+  position: { type: Number, required: true },
+  inventory_policy: { type: String, required: true },
+  compare_at_price: { type: Number, default: null },
+  fulfillment_service: { type: String, required: true },
+  inventory_management: { type: String, default: null },
+  option1: { type: String, required: true },
+  option2: { type: String, default: null },
+  option3: { type: String, default: null },
+  created_at: { type: String, default: "" },
+  updated_at: { type: String, default: "" },
+  taxable: { type: Boolean, required: true },
+  barcode: { type: String, default: null },
+  grams: { type: Number, required: true },
+  weight: { type: Number, required: true },
+  weight_unit: { type: String, required: true },
+  inventory_item_id: { type: Schema.Types.ObjectId, required: true },
+  inventory_quantity: { type: Number, required: true },
+  old_inventory_quantity: { type: Number, required: true },
+  requires_shipping: { type: Boolean, required: true },
+  admin_graphql_api_id: { type: String, required: true },
+  image_id: { type: Schema.Types.ObjectId, default: null },
+});
+
+// Schema for Product
+const ProductSchema: Schema = new Schema({
+  _id: { type: Schema.Types.ObjectId, required: true },
+  admin_graphql_api_id: { type: String, required: true },
+  body_html: { type: String, default: null },
+  created_at: { type: Date, required: true },
+  handle: { type: String, required: true },
+  id: { type: Schema.Types.ObjectId, required: true },
+  image: { type: String, default: null },
+  images: { type: [String], default: [] },
+  options: { type: [ProductOptionSchema], required: true },
+  product_type: { type: String, required: true },
+  published_at: { type: Date, default: null },
+  published_scope: { type: String, required: true },
+  status: { type: String, required: true },
+  tags: { type: String, default: "" },
+  template_suffix: { type: String, default: null },
+  title: { type: String, required: true },
+  updated_at: { type: Date, required: true },
+  variants: { type: [ProductVariantSchema], required: true },
+  vendor: { type: String, required: true },
+},{collection:'shopifyProducts'});
+
+// Create the Product model
+const Product: Model<IProduct> = model<IProduct>('Products', ProductSchema);
+
+export default Product;
+
+
+File: customer-lifetime-value.routes.ts
+Path: routes\customer-lifetime-value.routes.ts
+// src/routes/clvRoutes.ts
+
+import { Router } from 'express';
+import { CLVController } from '../controllers/customer-lifetime-value.controller';
+
+const CLVRoutes = Router();
+const clvController = new CLVController();
+
+CLVRoutes.get('/clv', clvController.getCLV);
+
+export default CLVRoutes;
+
+
+File: customers.routes.ts
+Path: routes\customers.routes.ts
+// routers/customerRouter.js (or .ts if TypeScript)
+import express from 'express';
+import { CustomerController } from '../controllers/customer.controller';
+
+const customerRoutes = express.Router();  // Use camelCase for consistency
+const customerController = new CustomerController();
+
+customerRoutes.get('/new-customers', customerController.getNewCustomers);
+customerRoutes.get('/geographical-distribution', customerController.getCustomerDistributionByCity);
+
+export default customerRoutes;
+
+
+File: orders.routes.ts
+Path: routes\orders.routes.ts
+// src/routes/orderRoutes.ts
+
+import { Router } from 'express';
+import { OrderController } from '../controllers/order.controller';
+
+const orderRoutes = Router();
+const orderController = new OrderController();
+
+orderRoutes.get('/total-sales', orderController.getTotalSalesOverTime);
+orderRoutes.get('/sales-growth', orderController.getSalesGrowthRate);
+orderRoutes.get('/repeat-customers', orderController.getRepeatCustomers);
+
+export default orderRoutes;
+
+
+File: server.ts
+Path: server.ts
+import app from './app';
+import connectDB from './config/db'; // Adjust the path according to your project structure
+
+const PORT = process.env.PORT || 3000;
+
+const startServer = async () => {
+  try {
+    await connectDB(); // Wait for the database connection
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+  }
+};
+
+startServer();
+
+
+File: customer-lifetime.service.ts
+Path: services\customer-lifetime.service.ts
+// src/services/clvService.ts
+
+import mongoose from 'mongoose';
+import Order from '../models/order.model';
+import Customer from '../models/customer.model';
+
+export class CLVService {
+  async calculateCLV() {
+    const cohorts = await Customer.aggregate([
+      {
+        $project: {
+          cohort: { $dateToString: { format: "%Y-%m", date: "$created_at" } },
+          _id: 1
+        }
+      }
+    ]);
+
+    const orders = await Order.aggregate([
+      {
+        $lookup: {
+          from: Customer.collection.name,
+          localField: 'customer.id',
+          foreignField: '_id',
+          as: 'customerData'
+        }
+      },
+      {
+        $unwind: '$customerData'
+      },
+      {
+        $group: {
+          _id: '$customerData.cohort',
+          totalValue: { $sum: { $toDouble: '$total_price_set.shop_money.amount' } }
+        }
+      }
+    ]);
+
+    return orders;
+  }
+}
+
+
+File: customer.service.ts
+Path: services\customer.service.ts
+// src/services/customer.service.ts
+
+import Customer from "../models/customer.model";
+
+export class CustomerService {
+  async getNewCustomers(interval: string | undefined) {
+    const intervalMapping: Record<string, string> = {
+      daily: "day",  // Maps 'daily' to 'day'
+      monthly: "month",
+      yearly: "year"
+    };
+
+    const validInterval = interval && intervalMapping[interval?.toLowerCase()]
+      ? intervalMapping[interval.toLowerCase()]
+      : "day";
+
+    const pipeline:any = [
+      {
+        $match: {
+          created_at: { $exists: true } // Ensure created_at exists
+        }
+      },
+      {
+        // Convert created_at from a string to a date
+        $addFields: {
+          created_at_date: { $dateFromString: { dateString: "$created_at" } }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateTrunc: {
+              date: "$created_at_date",
+              unit: validInterval,
+            }
+          },
+          newCustomers: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { '_id': 1 }
+      }
+    ];
+
+    return Customer.aggregate(pipeline).exec();
+  }
+
+  async getCustomerDistributionByCity() {
+    const pipeline:any = [
+      {
+        $group: {
+          _id: "$default_address.city",
+          customerCount: { $sum: 1 }
+        }
+      },
+      {
+        $sort: { customerCount: -1 }  // Optional: sorts the result by customer count in descending order
+      }
+    ];
+
+    return Customer.aggregate(pipeline).exec();
+  }
+}
+
+
+File: order.service.ts
+Path: services\order.service.ts
+// src/services/order.service.ts
+
+import Order from "../models/order.model";
+
+export class OrderService {
+  async getTotalSalesOverTime(interval: string) {
+    const intervalMapping: Record<string, string> = {
+      daily: "day",
+      monthly: "month",
+      quarterly: "quarter",
+      yearly: "year"
+    };
+
+    const validInterval = intervalMapping[interval] || "day"; // Default to 'day' if not specified
+
+    const pipeline:any = [
+      {
+        // Convert 'created_at' from string to date
+        $addFields: {
+          created_at_date: {
+            $dateFromString: {
+              dateString: "$created_at"
+            }
+          }
+        }
+      },
+      {
+        // Now group using the converted date
+        $group: {
+          _id: {
+            $dateTrunc: {
+              date: "$created_at_date",
+              unit: validInterval
+            }
+          },
+          totalSales: {
+            $sum: {
+              $toDouble: "$total_price_set.shop_money.amount" // Ensure this field is a string that can be converted to double
+            }
+          }
+        }
+      },
+      {
+        $sort: { '_id': 1 } // Sort by date ascending
+      }
+    ];
+
+    return Order.aggregate(pipeline).exec();
+  }
+
+  async getSalesGrowthRate(interval: string) {
+    const intervalMapping: Record<string, string> = {
+      daily: "day",
+      monthly: "month",
+      quarterly: "quarter",
+      yearly: "year"
+    };
+
+    const validInterval = intervalMapping[interval] || "month"; // Default to 'month' if not specified
+
+    const pipeline:any = [
+      {
+        $match: {
+          created_at: { $exists: true }
+        }
+      },
+      {
+        $addFields: {
+          created_at_date: { $dateFromString: { dateString: "$created_at" } }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            $dateTrunc: {
+              date: "$created_at_date",
+              unit: validInterval
+            }
+          },
+          totalSales: { $sum: { $toDouble: "$total_price_set.shop_money.amount" } }
+        }
+      },
+      {
+        $sort: { _id: 1 }
+      },
+      {
+        $setWindowFields: {
+          sortBy: { _id: 1 },
+          output: {
+            previousSales: { $shift: { output: "$totalSales", by: -1, default: null } }
+          }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          period: "$_id",
+          totalSales: 1,
+          growthRate: {
+            $cond: {
+              if: { $not: ["$previousSales"] },
+              then: null,
+              else: {
+                $multiply: [
+                  {
+                    $divide: [
+                      { $subtract: ["$totalSales", "$previousSales"] },
+                      "$previousSales"
+                    ]
+                  },
+                  100
+                ]
+              }
+            }
+          }
+        }
+      }
+    ];
+
+    return Order.aggregate(pipeline).exec();
+  }
+
+
+  async getRepeatCustomers(interval: string) {
+    const intervalMapping: Record<string, string> = {
+      daily: "day",
+      monthly: "month",
+      quarterly: "quarter",
+      yearly: "year"
+    };
+
+    const validInterval = intervalMapping[interval] || "month"; // Default to 'month' if not specified
+
+    const pipeline:any = [
+      {
+        $match: {
+          "customer.id": { $exists: true }, // Ensure the customer ID exists
+          "created_at": { $exists: true }   // Ensure created_at exists
+        }
+      },
+      {
+        $addFields: {
+          converted_date: {
+            $dateFromString: {
+              dateString: "$created_at",
+              onError: null  // Handle any conversion errors
+            }
+          }
+        }
+      },
+      {
+        $match: {
+          "converted_date": { $ne: null } // Ensure only successfully converted dates are processed
+        }
+      },
+      {
+        $group: {
+          _id: {
+            customer: "$customer.id",
+            period: {
+              $dateTrunc: {
+                date: "$converted_date", // Use the correctly converted date
+                unit: validInterval
+              }
+            }
+          },
+          orders: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: "$_id.period",
+          customers: { $sum: 1 },
+          repeatCustomers: {
+            $sum: {
+              $cond: [{ $gt: ["$orders", 1] }, 1, 0]
+            }
+          }
+        }
+      },
+      {
+        $sort: { "_id": 1 }
+      }
+    ];
+
+    return Order.aggregate(pipeline).exec();
+  }
+}
+
+
+File: helper.ts
+Path: utils\helper.ts
+
+
+File: interval.enum.ts
+Path: utils\interval.enum.ts
+// utils/IntervalEnum.ts
+
+export enum IntervalEnum {
+    Daily = 'daily',
+    Monthly = 'monthly',
+    Quarterly = 'quarterly',
+    Yearly = 'yearly'
+}
+
+

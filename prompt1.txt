@@ -1,0 +1,31 @@
+1. API to Retrieve Total Sales Over Time //DONE
+Collection Used: shopifyOrders
+Relevant Fields:
+total_price_set.shop_money.amount: This field will give the total sales in the shop's local currency.
+created_at: Use this field to group and aggregate sales data by various time intervals (daily, monthly, quarterly, yearly).
+
+2. API to Calculate Sales Growth Rate Over Time //DONE
+Collection Used: shopifyOrders
+Relevant Fields:
+Similar to the Total Sales API, use the total_price_set.shop_money.amount and created_at.
+
+3. API to Track New Customers Added Over Time // DONE
+Collection Used: shopifyCustomers
+Relevant Fields:
+created_at: This date field indicates when a customer was added to the database.
+
+4. API to Identify Number of Repeat Customers //DONE
+Collection Used: shopifyOrders
+Relevant Fields:
+customer.id: You will need to analyze the frequency of orders per customer ID to identify repeat customers.
+
+5. API to Visualize Geographical Distribution of Customers // DONE
+Collection Used: shopifyCustomers
+Relevant Fields:
+default_address.city: Use this field to understand and visualize where customers are located.
+
+6. API to Calculate Customer Lifetime Value by Cohorts
+Collection Used: Both shopifyCustomers and shopifyOrders
+Relevant Fields:
+From shopifyCustomers: created_at to group customers into cohorts based on their first purchase month.
+From shopifyOrders: Sum up total_price_set.shop_money.amount for orders per customer ID to calculate the lifetime value.
